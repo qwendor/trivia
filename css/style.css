@@ -206,7 +206,7 @@ img { display: block; }
 .chip.on.lav { background: var(--lav); border-color: var(--lav); }
 .chip.on.sky { background: var(--sky); border-color: var(--sky); }
 .chip.on.melon { background: var(--melon); border-color: var(--melon); }
-.lobby .settings .start { margin-left: auto; }
+.lobby .settings .start { margin-left: auto; margin-right: 120px; }
 
 /* -- question header -- */
 .qhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
