@@ -26,7 +26,8 @@
     return {
       code: "", phase: "lobby", players: {}, order: [], qs: [], qi: -1,
       settings: { boardEvery: 1 },
-      askStart: 0, deadline: 0, answers: {}, prevRank: {}, muted: false, nextSeq: 1, tbUsed: 0
+      askStart: 0, deadline: 0, answers: {}, prevRank: {}, muted: false, nextSeq: 1, tbUsed: 0,
+      hist: [], midRank: {}, practice: false, pq: null, awards: null
     };
   }
   function connectedPlayers() { return G.order.map(function (id) { return G.players[id]; }).filter(function (p) { return p && (p.connected || p.bot); }); }
@@ -38,7 +39,13 @@
   }
   function rankOf(pid) { var r = ranked(); for (var i = 0; i < r.length; i++) if (r[i].pid === pid) return i + 1; return r.length; }
   function scoreFor(ms, limitMs) { var k = Math.max(0, Math.min(1, 1 - ms / limitMs)); return BASE + Math.round(SPEED_MAX * k); }
-  function current() { return G.qs[G.qi]; }
+  function current() { return G.practice ? G.pq : G.qs[G.qi]; }
+  function qNum() { return G.practice ? 0 : G.qi + 1; }
+  var STREAK_STEP = 100, STREAK_MAX = 300;   // +100 per right answer in a row after the first, capped
+  function streakBonus(streak) { return Math.min(STREAK_MAX, Math.max(0, streak - 1) * STREAK_STEP); }
+  var EMO = ["\uD83D\uDD25", "\uD83D\uDE02", "\uD83D\uDE2D", "\uD83D\uDC4F", "\uD83D\uDC80", "\uD83E\uDD2F"];
+  var PRACTICE_Q = { cat: "Practice", tag: "This one does not count", color: "sky", round: 0, roundName: "Practice", diff: "Warm-up",
+    q: "Practice question: what is the name of the VCU mascot?", a: ["Rodney the Ram", "Rocky the Ram", "Ramsey", "Rollo"], c: 0, t: 15, practice: true };
   function isLast() { return G.qi >= G.qs.length - 1; }
   function tiedAtTop() { var r = ranked(); return r.length > 1 && r[0].score === r[1].score; }
   function tiebreakerLeft() { return !!Q.tiebreaker(G.tbUsed); }
@@ -62,7 +69,7 @@
           pid = "p" + (G.nextSeq++) + "-" + Math.random().toString(36).slice(2, 6);
           G.players[pid] = {
             pid: pid, name: name, avatar: av, color: U.PLAYER_COLORS[(G.order.length) % U.PLAYER_COLORS.length],
-            score: 0, correct: 0, totalMs: 0, streak: 0, lastGain: 0, connected: true, joined: Date.now(), bot: false
+            score: 0, correct: 0, totalMs: 0, streak: 0, lastGain: 0, connected: true, joined: Date.now(), bot: false, answers: {}
           };
           G.order.push(pid);
           SFX.join();
@@ -74,6 +81,7 @@
       onLeave: function (pid) { var p = G.players[pid]; if (p) { p.connected = false; onRosterChange(); } },
       onMsg: function (pid, msg) {
         if (msg.t === "answer") takeAnswer(pid, msg);
+        else if (msg.t === "react") spawnReaction(pid, msg.e);
       },
       onError: function (err) { U.toast("Connection problem: " + (err && err.type || "unknown"), true); }
     });
@@ -85,9 +93,9 @@
     net.send(pid, w);
     // Catch a late or returning player up with whatever is on screen.
     if (G.phase === "ask" && Date.now() < G.deadline && !G.answers[pid]) net.send(pid, askMsg(Date.now() - G.askStart));
-    else if (G.phase === "read" || G.phase === "round") net.send(pid, { t: "read", n: G.qi + 1, total: G.qs.length, cat: current().cat, color: current().color });
+    else if (G.phase === "read" || G.phase === "round") net.send(pid, { t: "read", n: qNum(), total: G.qs.length, cat: current().cat, color: current().color, practice: G.practice });
     else if (G.phase === "reveal" || G.phase === "board" || G.phase === "winner") net.send(pid, { t: "board", rank: rankOf(pid), total: allPlayers().length, score: p.score });
-    else if (G.phase === "podium") sendFinal(pid);
+    else if (G.phase === "podium" || G.phase === "awards") sendFinal(pid);
     else net.send(pid, { t: "lobby", n: allPlayers().length });
   }
 
@@ -123,6 +131,7 @@
             '<div class="grp" id="board"><span class="eyebrow">Leaderboard</span>' + [[1, "Every Q"], [5, "Every round"], [99, "End only"]].map(function (o) {
               return '<button class="chip' + (s.boardEvery === o[0] ? " on" : "") + '" data-board="' + o[0] + '">' + o[1] + '</button>';
             }).join("") + '</div>' +
+            '<button class="btn ghost" id="practiceBtn">Practice question</button>' +
             '<button class="btn gold display start" id="startBtn">Start</button>' +
           '</div>' +
         '</div>' +
@@ -135,6 +144,38 @@
       s.boardEvery = +b.dataset.board; U.qa("#board .chip").forEach(function (c) { c.classList.toggle("on", c === b); });
     });
     U.on("#startBtn", "click", startGame);
+    U.on("#practiceBtn", "click", practice);
+  }
+
+  /* ---------------- practice (lobby warm-up, no points) ---------------- */
+  function practice() {
+    if (G.phase !== "lobby") return;
+    if (!allPlayers().length) { U.toast("Nobody has joined yet", true); return; }
+    SFX.unlock();
+    G.practice = true; G.pq = Object.assign({}, PRACTICE_Q, { t: FAST ? 7 : 15 }); G.answers = {};
+    showRead();
+  }
+  function endPractice() {
+    clearTimers(); stopTick();
+    G.practice = false; G.pq = null; G.phase = "lobby"; G.answers = {};
+    net.broadcast({ t: "lobby", n: allPlayers().length, practiced: true });
+    paintLobby();
+  }
+
+  /* ---------------- reactions (phones -> floating emoji) ---------------- */
+  function spawnReaction(pid, e) {
+    if (["reveal", "board", "winner", "podium", "awards"].indexOf(G.phase) < 0) return;
+    var p = G.players[pid]; if (!p || !EMO[e]) return;
+    var now = Date.now(); if (p.lastReact && now - p.lastReact < 500) return; p.lastReact = now;
+    var layer = U.q("#rx");
+    if (!layer) { layer = document.createElement("div"); layer.id = "rx"; document.body.appendChild(layer); }
+    while (layer.children.length > 40) layer.firstChild.remove();
+    var d = document.createElement("div"); d.className = "rxi";
+    d.style.left = (6 + Math.random() * 86) + "%"; d.style.setProperty("--pc", p.color);
+    d.style.setProperty("--drift", ((Math.random() - 0.5) * 120) + "px");
+    d.innerHTML = '<span class="em">' + EMO[e] + '</span><span class="who"><i>' + avatarImg(p) + '</i>' + U.esc(p.name) + '</span>';
+    layer.appendChild(d);
+    setTimeout(function () { d.remove(); }, 3400);
   }
 
   function drawQR() {
@@ -186,7 +227,8 @@
     SFX.unlock();
     G.qs = Q.flat(FAST ? 7 : 0);
     G.qi = -1; G.tbUsed = 0;
-    allPlayers().forEach(function (p) { p.score = 0; p.correct = 0; p.totalMs = 0; p.streak = 0; p.lastGain = 0; });
+    G.hist = []; G.midRank = {}; G.awards = null;
+    allPlayers().forEach(function (p) { p.score = 0; p.correct = 0; p.totalMs = 0; p.streak = 0; p.lastGain = 0; p.answers = {}; });
     SFX.go();
     nextQuestion();
   }
@@ -210,7 +252,7 @@
     clearTimers();
     G.phase = "read";
     var q = current();
-    net.broadcast({ t: "read", n: G.qi + 1, total: G.qs.length, cat: q.cat, color: q.color });
+    net.broadcast({ t: "read", n: qNum(), total: G.qs.length, cat: q.cat, color: q.color, practice: G.practice });
     paintRead();
     SFX.whoosh();
     later(ask, READ_MS);
@@ -218,7 +260,7 @@
 
   function askMsg(elapsed) {
     var q = current();
-    return { t: "ask", q: G.qi, n: G.qi + 1, total: G.qs.length, text: q.q, a: q.a, cat: q.cat, color: q.color, limit: q.t * 1000, elapsed: elapsed || 0 };
+    return { t: "ask", q: G.qi, n: qNum(), total: G.qs.length, text: q.q, a: q.a, cat: q.cat, color: q.color, limit: q.t * 1000, elapsed: elapsed || 0, practice: G.practice };
   }
   function ask() {
     G.phase = "ask";
@@ -262,36 +304,49 @@
     G.phase = "reveal"; G.closing = false;
     stopTick(); clearTimers();
     var q = current(), limitMs = q.t * 1000;
-    var counts = [0, 0, 0, 0], fastest = null;
+    var counts = [0, 0, 0, 0], fastest = null, hot = null, detail = {};
     allPlayers().forEach(function (p) {
       var a = G.answers[p.pid];
-      var gained = 0, right = false;
+      var gained = 0, right = false, speed = 0, sb = 0;
       if (a) {
         counts[a.choice]++;
         right = a.choice === q.c;
-        if (right) {
-          gained = scoreFor(a.ms, limitMs);
-          p.correct++; p.totalMs += a.ms; p.streak++;
-          if (!fastest || a.ms < fastest.ms) fastest = { p: p, ms: a.ms };
-        } else p.streak = 0;
+        if (right && (!fastest || a.ms < fastest.ms)) fastest = { p: p, ms: a.ms };
+      }
+      if (G.practice) { detail[p.pid] = { speed: 0, sb: 0, right: right }; return; }
+      if (right) {
+        speed = scoreFor(a.ms, limitMs) - BASE;
+        p.correct++; p.totalMs += a.ms; p.streak++;
+        sb = streakBonus(p.streak);
+        gained = BASE + speed + sb;
+        if (p.streak >= 3 && (!hot || p.streak > hot.streak)) hot = { p: p, streak: p.streak };
       } else p.streak = 0;
       p.lastGain = gained; p.score += gained;
+      p.answers[G.qi] = { choice: a ? a.choice : -1, ms: a ? a.ms : 0, right: right, gained: gained };
+      detail[p.pid] = { speed: speed, sb: sb, right: right };
     });
+    if (!G.practice) {
+      var answered = counts[0] + counts[1] + counts[2] + counts[3];
+      G.hist[G.qi] = { counts: counts, c: q.c, round: q.round, majorityWrong: counts[q.c] * 2 < answered };
+      if (G.qi === Math.floor(G.qs.length / 2) - 1) { G.midRank = {}; ranked().forEach(function (p, i) { G.midRank[p.pid] = i + 1; }); }
+    }
     var total = allPlayers().length;
     allPlayers().forEach(function (p) {
-      var a = G.answers[p.pid];
+      var a = G.answers[p.pid], d = detail[p.pid] || {};
       net.send(p.pid, {
-        t: "result", q: G.qi, answered: !!a, choice: a ? a.choice : -1, correct: q.c, right: !!a && a.choice === q.c,
-        gained: p.lastGain, score: p.score, rank: rankOf(p.pid), total: total, streak: p.streak, answer: q.a[q.c]
+        t: "result", q: G.qi, answered: !!a, choice: a ? a.choice : -1, correct: q.c, right: !!d.right,
+        gained: G.practice ? 0 : p.lastGain, speed: d.speed || 0, streakBonus: d.sb || 0, score: p.score, rank: G.practice ? 0 : rankOf(p.pid),
+        total: total, streak: p.streak, answer: q.a[q.c], practice: G.practice
       });
     });
-    paintReveal(counts, fastest);
+    paintReveal(counts, fastest, hot);
     SFX.reveal();
     if (AUTO) later(afterReveal, REVEAL_HOLD);
   }
 
   function afterReveal() {
     if (G.phase !== "reveal") return;
+    if (G.practice) { endPractice(); return; }
     var every = G.settings.boardEvery, last = isLast();
     if (last || current().tiebreak || ((G.qi + 1) % every === 0)) board(); else nextQuestion();
   }
@@ -318,12 +373,15 @@
     net.broadcast({ t: "board" });
     paintBoard();
     SFX.whoosh();
+    if (params.has("bots")) botsReact();
     if (AUTO) later(afterBoard, FAST ? 1800 : 5000);
   }
 
   function sendFinal(pid) {
     var p = G.players[pid]; if (!p) return;
-    net.send(pid, { t: "final", rank: rankOf(pid), total: allPlayers().length, score: p.score, correct: p.correct, qs: G.qs.length });
+    var aw = (G.awards || []).filter(function (a) { return a.p.pid === pid; })[0];
+    net.send(pid, { t: "final", rank: rankOf(pid), total: allPlayers().length, score: p.score, correct: p.correct, qs: G.qs.length,
+      award: aw ? { title: aw.title, text: aw.text, icon: aw.icon } : null });
   }
   function podium() {
     clearTimers(); stopTick();
@@ -342,13 +400,18 @@
     else if (G.phase === "reveal") afterReveal();
     else if (G.phase === "board") afterBoard();
     else if (G.phase === "winner") { if (G.winnerDone) podium(); }
-    else if (G.phase === "podium") { U.toast("That's the game. Reload to host another."); }
+    else if (G.phase === "podium") awards();
+    else if (G.phase === "awards") { U.toast("That was the game. Reload to host another."); }
   }
 
   /* ---------------- timer ---------------- */
-  var lastWhole = -1;
-  function startTick() { stopTick(); lastWhole = -1; tick(); }
-  function stopTick() { if (tickRAF) cancelAnimationFrame(tickRAF); tickRAF = 0; }
+  var lastWhole = -1, deadlineIv = 0;
+  function startTick() {
+    stopTick(); lastWhole = -1; tick();
+    // rAF pauses in a hidden tab, so a plain interval guards the deadline too.
+    deadlineIv = setInterval(function () { if (G.phase === "ask" && Date.now() >= G.deadline) reveal(); }, 250);
+  }
+  function stopTick() { if (tickRAF) cancelAnimationFrame(tickRAF); tickRAF = 0; if (deadlineIv) clearInterval(deadlineIv); deadlineIv = 0; }
   function tick() {
     if (G.phase !== "ask") return;
     var limit = current().t * 1000, left = G.deadline - Date.now(), k = Math.max(0, left / limit);
@@ -430,11 +493,11 @@
     var h = U.q("#ctlhint"); if (h) h.textContent = hint || "";
     U.on("#nextBtn", "click", advance);
     U.on("#muteBtn", "click", function () { G.muted = !G.muted; SFX.mute(G.muted); this.textContent = G.muted ? "Unmute" : "Mute"; });
-    U.on("#endBtn", "click", function () { if (G.phase !== "lobby" && G.phase !== "podium" && confirm("End the game now and show the podium?")) podium(); });
+    U.on("#endBtn", "click", function () { if (["lobby", "podium", "awards", "winner"].indexOf(G.phase) < 0 && !G.practice && confirm("End the game now and show the winner?")) { clearTimers(); stopTick(); winner(); } });
   }
   function qhead(q) {
     return '<div class="qhead rise"><div class="cat"><span class="pill ' + q.color + '">' + U.esc(q.cat) + '</span><span class="serif">' + U.esc(q.tag) + '</span></div>' +
-      '<div class="num">Q <b>' + (G.qi + 1) + '</b> / ' + G.qs.length + '</div></div>';
+      '<div class="num">' + (G.practice ? 'Practice' : 'Q <b>' + (G.qi + 1) + '</b> / ' + G.qs.length) + '</div></div>';
   }
 
   function paintRead() {
@@ -456,7 +519,7 @@
       '<div class="question"><div class="text">' + U.esc(q.q) + '</div>' +
         '<div class="answers" id="answers">' + q.a.map(function (t, i) {
           var s = U.SLOTS[i];
-          return '<div class="opt ' + s.key + '" data-i="' + i + '"><div class="bar"></div><div class="shape">' + s.svg + '</div><div class="label">' + U.esc(t) + '</div><div class="cnt">0</div><div class="check">Correct</div></div>';
+          return '<div class="opt ' + s.key + '" data-i="' + i + '"><div class="bar"></div><div class="shape">' + s.svg + '</div><div class="label">' + U.esc(t) + '</div><div class="cnt">0</div><div class="check">Correct</div><div class="wall"></div></div>';
         }).join("") + '</div>' +
         '<div class="lockedtray"><span class="eyebrow">Locked in</span><span class="count" id="lockcount"></span><div class="avs" id="lockavs"></div>' +
         '<span class="count" style="margin-left:auto" id="tnum"></span></div>' +
@@ -479,14 +542,23 @@
     });
   }
 
-  function paintReveal(counts, fastest) {
+  function paintReveal(counts, fastest, hot) {
     var q = current(), total = Math.max(1, Object.keys(G.answers).length);
     var ans = U.q("#answers"); if (!ans) return;
+    var walls = [[], [], [], []];
+    Object.keys(G.answers).forEach(function (pid) { var p = G.players[pid]; if (p) walls[G.answers[pid].choice].push(p); });
     U.qa(".opt", ans).forEach(function (o, i) {
       o.classList.toggle("right", i === q.c);
       U.q(".cnt", o).textContent = counts[i];
       later(function () { U.q(".bar", o).style.width = Math.round(100 * counts[i] / total) + "%"; }, 150);
+      var w = U.q(".wall", o);
+      walls[i].forEach(function (p, k) {
+        var m = document.createElement("div"); m.className = "mini"; m.style.setProperty("--pc", p.color);
+        m.style.animationDelay = (0.25 + k * 0.045) + "s"; m.title = p.name; m.innerHTML = avatarImg(p);
+        w.appendChild(m);
+      });
     });
+    ans.classList.add("wall-on");
     ans.classList.add("revealed");
     var tm = U.q("#timer"); if (tm) tm.style.opacity = ".25";
     var tray = U.q(".lockedtray");
@@ -497,8 +569,12 @@
       } else {
         tray.outerHTML = '<div class="fastest"><span class="bolt">&#128556;</span><div><div class="eyebrow">Nobody got it</div><div class="nm">Tough one.</div></div></div>';
       }
+      if (hot) {
+        U.q(".fastest").insertAdjacentHTML("afterend", '<div class="fastest hot" style="--pc:' + hot.p.color + '"><span class="bolt">&#128293;</span><div class="av">' + avatarImg(hot.p) + '</div>' +
+          '<div><div class="eyebrow">On a streak</div><div class="nm">' + U.esc(hot.p.name) + '</div></div><div class="ms">' + hot.streak + ' in a row</div></div>');
+      }
     }
-    var h = U.q("#ctlhint"); if (h) h.textContent = "Space: " + ((isLast() || current().tiebreak || (G.qi + 1) % G.settings.boardEvery === 0) ? "leaderboard" : "next question");
+    var h = U.q("#ctlhint"); if (h) h.textContent = "Space: " + (G.practice ? "back to the lobby" : (isLast() || current().tiebreak || (G.qi + 1) % G.settings.boardEvery === 0) ? "leaderboard" : "next question");
   }
 
   function paintBoard() {
@@ -545,7 +621,51 @@
         return '<div class="pcard" style="--pc:' + p.color + ';animation-delay:' + (2 + i * 0.08) + 's"><div class="av">' + avatarImg(p) + '</div><span class="rk">' + (i + 4) + '</span><div class="nm">' + U.esc(p.name) + '</div></div>';
       }).join("") + '</div>' : "") +
     '</div></div>' + controls(), "host");
+    bindControls("Space: superlatives");
+    var nb = U.q("#nextBtn"); if (nb) nb.textContent = "Superlatives";
+  }
+
+  /* ---------------- superlatives ---------------- */
+  function computeAwards() {
+    var ps = allPlayers(), used = {}, out = [];
+    function pick(list, title, icon) {
+      var c = list.filter(function (x) { return !used[x.p.pid]; })[0] || list[0];
+      if (!c) return;
+      used[c.p.pid] = true;
+      out.push({ title: title, icon: icon, p: c.p, text: c.text });
+    }
+    var ff = ps.filter(function (p) { return p.correct >= 3; }).map(function (p) { return { p: p, v: p.totalMs / p.correct }; })
+      .sort(function (a, b) { return a.v - b.v; }).map(function (x) { return { p: x.p, text: (x.v / 1000).toFixed(1) + "s average on right answers" }; });
+    var lastRound = 0; G.qs.forEach(function (q) { if (q.round > lastRound) lastRound = q.round; });
+    var cl = ps.map(function (p) { var v = 0; G.qs.forEach(function (q, i) { if (q.round === lastRound && p.answers[i]) v += p.answers[i].gained; }); return { p: p, v: v }; })
+      .filter(function (x) { return x.v > 0; }).sort(function (a, b) { return b.v - a.v; }).map(function (x) { return { p: x.p, text: U.fmtScore(x.v) + " points in the final round" }; });
+    var fin = {}; ranked().forEach(function (p, i) { fin[p.pid] = i + 1; });
+    var cb = ps.map(function (p) { return { p: p, v: (G.midRank[p.pid] || fin[p.pid]) - fin[p.pid] }; })
+      .filter(function (x) { return x.v >= 2; }).sort(function (a, b) { return b.v - a.v; }).map(function (x) { return { p: x.p, text: "climbed " + x.v + " places after halftime" }; });
+    var ag = ps.map(function (p) { var v = 0; G.hist.forEach(function (h, i) { if (h && h.majorityWrong && p.answers[i] && p.answers[i].right) v++; }); return { p: p, v: v }; })
+      .filter(function (x) { return x.v >= 2; }).sort(function (a, b) { return b.v - a.v; }).map(function (x) { return { p: x.p, text: "right " + x.v + " times when the room was wrong" }; });
+    pick(ff, "Fastest finger", "\u26A1"); pick(cl, "Clutch", "\uD83C\uDFAF"); pick(cb, "Comeback", "\uD83D\uDCC8"); pick(ag, "Against the grain", "\uD83E\uDDE0");
+    return out;
+  }
+  function awards() {
+    clearTimers(); stopTick();
+    G.phase = "awards";
+    G.awards = G.awards || computeAwards();
+    paintAwards(G.awards);
+    G.awards.forEach(function (a, i) { later(function () { net.send(a.p.pid, { t: "award", title: a.title, text: a.text, icon: a.icon }); }, 400 + i * 900); });
+  }
+  function paintAwards(list) {
+    var cls = ["gold", "lav", "sky", "melon"];
+    U.render(topbar() + '<div class="stage"><div class="awards">' +
+      '<div class="title"><div class="eyebrow sky rise">Before you go</div><div class="display rise d1">Super<span class="gold">latives</span></div></div>' +
+      '<div class="cards">' + (list.length ? list.map(function (a, i) {
+        return '<div class="card ' + cls[i % 4] + '" style="--pc:' + a.p.color + ';animation-delay:' + (0.5 + i * 0.9) + 's">' +
+          '<div class="icon">' + a.icon + '</div><div class="ttl display">' + U.esc(a.title) + '</div>' +
+          '<div class="av">' + avatarImg(a.p) + '</div><div class="nm">' + U.esc(a.p.name) + '</div><div class="txt">' + U.esc(a.text) + '</div></div>';
+      }).join("") : '<div class="serif" style="font-size:28px;color:var(--sky-2)">Not enough data for awards this time.</div>') + '</div>' +
+    '</div></div>' + controls(), "host");
     bindControls("Game over");
+    list.forEach(function (a, i) { later(function () { SFX.right(); }, 500 + i * 900); });
     var nb = U.q("#nextBtn"); if (nb) nb.textContent = "Play again";
     U.on("#nextBtn", "click", function () { location.reload(); });
   }
@@ -557,7 +677,7 @@
       var nm = BOT_NAMES[(G.order.length) % BOT_NAMES.length] + (G.order.length >= BOT_NAMES.length ? " " + (G.order.length + 1) : "");
       G.players[pid] = {
         pid: pid, name: nm, avatar: window.AVATAR.randomFace(G.order.length * 17 + 3), color: U.PLAYER_COLORS[G.order.length % U.PLAYER_COLORS.length],
-        score: 0, correct: 0, totalMs: 0, streak: 0, lastGain: 0, connected: true, joined: Date.now() + i, bot: true, skill: 0.4 + Math.random() * 0.5
+        score: 0, correct: 0, totalMs: 0, streak: 0, lastGain: 0, connected: true, joined: Date.now() + i, bot: true, skill: 0.4 + Math.random() * 0.5, answers: {}
       };
       G.order.push(pid);
     }
@@ -574,6 +694,11 @@
         if (Math.random() < 0.08) return; // some people never tap
         takeAnswer(p.pid, { q: qi, choice: choice, ms: Date.now() - G.askStart });
       }, delay);
+    });
+  }
+  function botsReact() {
+    allPlayers().filter(function (p) { return p.bot; }).forEach(function (p) {
+      if (Math.random() < 0.5) later(function () { spawnReaction(p.pid, (Math.random() * EMO.length) | 0); }, 300 + Math.random() * 2500);
     });
   }
 
@@ -595,7 +720,7 @@
       next: advance, skip: advance,
       addBots: addBots,
       jumpToEnd: function () { if (G.phase === "lobby") startGame(); clearTimers(); stopTick(); G.qi = G.qs.length - 1; winner(); },
-      board: board, winner: winner, podium: podium
+      board: board, winner: winner, podium: podium, awards: awards, practice: practice, react: spawnReaction
     };
   }
 

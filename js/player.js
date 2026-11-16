@@ -16,7 +16,28 @@
       (S.name ? '<div class="me" style="--pc:' + S.color + '"><div class="av">' + (S.avatar ? '<img src="' + S.avatar + '" alt="">' : "") + '</div>' + U.esc(S.name) + '</div>' : "") + '</div>' +
       '<div class="conn" id="conn">Reconnecting...</div>';
   }
-  function paint(html) { U.render(top() + '<div class="body">' + html + '</div>', "player"); }
+  function paint(html) { U.render(top() + '<div class="body">' + html + '</div>', "player"); bindRx(); }
+
+  var EMO = ["\uD83D\uDD25", "\uD83D\uDE02", "\uD83D\uDE2D", "\uD83D\uDC4F", "\uD83D\uDC80", "\uD83E\uDD2F"];
+  var lastRx = 0;
+  function rxbar() {
+    return '<div class="rxbar" id="rxbar">' + EMO.map(function (e, i) { return '<button type="button" data-e="' + i + '">' + e + '</button>'; }).join("") + '</div>' +
+      '<div class="rxhint">Tap to react on the big screen</div>';
+  }
+  function bindRx() {
+    var bar = U.q("#rxbar"); if (!bar) return;
+    bar.addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      var now = Date.now(); if (now - lastRx < 450) return; lastRx = now;
+      b.classList.add("bump"); setTimeout(function () { b.classList.remove("bump"); }, 200);
+      if (navigator.vibrate) try { navigator.vibrate(12); } catch (x) {}
+      net.send({ t: "react", e: +b.dataset.e });
+    });
+  }
+  function ribbon(a) {
+    if (!a) return "";
+    return '<div class="ribbon"><span class="em">' + a.icon + '</span><div><div class="t">' + U.esc(a.title) + '</div><div class="x">' + U.esc(a.text) + '</div></div></div>';
+  }
 
   /* ---------------- join ---------------- */
   function paintJoin() {
@@ -48,7 +69,7 @@
   }
 
   /* ---------------- waiting ---------------- */
-  function paintWait(sub) {
+  function paintWait(sub, withRx) {
     S.phase = "wait";
     paint('<div class="wait">' +
       '<div class="bigav" style="--pc:' + S.color + '">' + (S.avatar ? '<img src="' + S.avatar + '" alt="">' : "") + '</div>' +
@@ -56,6 +77,7 @@
       '<div class="serif">Eyes on the big screen.</div>' +
       '<div class="sub pulse" id="waitsub">' + U.esc(sub || "Waiting for the host to start") + '</div>' +
       '<div class="count" id="waitcount"></div>' +
+      (withRx ? rxbar() : "") +
     '</div>');
     paintCount();
   }
@@ -74,7 +96,7 @@
   function paintRead(m) {
     S.phase = "read";
     paint('<div class="wait">' +
-      '<div class="eyebrow sky">Question ' + m.n + ' of ' + m.total + '</div>' +
+      '<div class="eyebrow sky">' + (m.practice ? "Practice question" : "Question " + m.n + " of " + m.total) + '</div>' +
       '<div class="display" style="margin-top:14px">Read the<br><span class="gold">screen</span></div>' +
       '<div class="serif">Answers are coming to your phone...</div>' +
       '<div class="sub">' + U.esc(m.cat) + '</div>' +
@@ -86,7 +108,7 @@
     S.phase = "ask"; S.q = m; S.choice = -1; S.limit = m.limit;
     S.askedAt = Date.now() - (m.elapsed || 0);
     paint('<div class="pq">' +
-      '<div class="meta"><div class="num">Q <b>' + m.n + '</b> / ' + m.total + '</div><div class="cat ' + m.color + '">' + U.esc(m.cat) + '</div></div>' +
+      '<div class="meta"><div class="num">' + (m.practice ? "Practice" : 'Q <b>' + m.n + '</b> / ' + m.total) + '</div><div class="cat ' + m.color + '">' + U.esc(m.cat) + '</div></div>' +
       '<div class="timer" id="timer"><i id="tbar"></i></div>' +
       '<div class="qt">' + U.esc(m.text) + '</div>' +
       '<div class="pbtns" id="pbtns">' + m.a.map(function (t, i) {
@@ -129,16 +151,22 @@
     S.phase = "result"; S.score = m.score; stopTick();
     var right = m.right;
     var verdict = !m.answered ? "No answer" : right ? ["Correct!", "Nailed it", "Yes!", "Big brain"][(Math.random() * 4) | 0] : ["Not this time", "Nope", "So close", "Next one"][(Math.random() * 4) | 0];
+    var bd = "";
+    if (right && !m.practice) {
+      bd = "1,000" + (m.speed > 0 ? " + " + m.speed + " speed" : "") + (m.streakBonus > 0 ? " + <b>" + m.streakBonus + " streak</b>" : "");
+    }
     paint('<div class="result ' + (right ? "right" : "wrong") + '">' +
+      (m.practice ? '<div class="eyebrow sky rise">Practice, no points</div>' : "") +
       '<div class="verdict display pop">' + U.esc(verdict) + '</div>' +
-      '<div class="gained rise d1">' + (right ? "+" + U.fmtScore(m.gained) : "+0") +
-        (right ? '<small>' + (m.gained - 1000 > 0 ? "1,000 + " + (m.gained - 1000) + " speed bonus" : "1,000") + '</small>' : "") + '</div>' +
+      (m.practice ? "" : '<div class="gained rise d1">' + (right ? "+" + U.fmtScore(m.gained) : "+0") + (bd ? '<small class="bd">' + bd + '</small>' : "") + '</div>') +
       (!right ? '<div class="ans rise d2">The answer was <b>' + U.esc(m.answer) + '</b></div>' : "") +
-      '<div class="rank rise d3"><div><div class="eyebrow">Your rank</div><div class="display">' + U.ordinal(m.rank) + '</div></div>' +
-        '<div><div class="eyebrow">Score</div><div class="display" id="myscore">' + U.fmtScore(m.score - m.gained) + '</div></div></div>' +
-      (m.streak >= 3 ? '<div class="streak rise d4">' + m.streak + ' in a row. Keep it going.</div>' : "") +
+      (m.practice ? '<div class="ans rise d2">You have got the hang of it. Wait for the real thing.</div>' :
+        '<div class="rank rise d3"><div><div class="eyebrow">Your rank</div><div class="display">' + U.ordinal(m.rank) + '</div></div>' +
+        '<div><div class="eyebrow">Score</div><div class="display" id="myscore">' + U.fmtScore(m.score - m.gained) + '</div></div></div>') +
+      (m.streak >= 3 && !m.practice ? '<div class="streak rise d4">' + m.streak + ' in a row. Keep it going.</div>' : "") +
+      (m.practice ? "" : rxbar()) +
     '</div>');
-    U.countUp(U.q("#myscore"), m.score - m.gained, m.score, 900);
+    if (!m.practice) U.countUp(U.q("#myscore"), m.score - m.gained, m.score, 900);
     if (right) { U.SFX.right(); if (navigator.vibrate) try { navigator.vibrate([40, 40, 80]); } catch (e) {} } else U.SFX.wrong();
   }
 
@@ -152,6 +180,8 @@
       '<div class="serif rise d1">' + line + '</div>' +
       '<div class="sc rise d2">' + U.fmtScore(m.score) + '</div>' +
       '<div class="sub rise d3">' + m.correct + ' of ' + m.qs + ' right &middot; ' + m.total + ' players</div>' +
+      '<div id="ribbon">' + ribbon(m.award) + '</div>' +
+      rxbar() +
     '</div>');
     if (m.rank <= 3) { U.confetti({ count: 140 }); U.SFX.fanfare(); }
   }
@@ -171,14 +201,15 @@
             S.pid = m.pid; S.color = m.color || S.color; S.n = m.n || 0; S.score = m.score || 0; save();
             if (m.phase === "lobby") paintWait();
             break;
-          case "lobby": S.n = m.n || 0; if (S.phase === "wait") paintCount(); else if (S.phase === "join") {} else paintWait(); break;
+          case "lobby": S.n = m.n || 0; if (S.phase === "wait") paintCount(); else if (S.phase === "join") {} else paintWait(m.practiced ? "Practice done. Waiting for the host to start" : ""); break;
           case "round": paintRound(m); break;
           case "read": paintRead(m); break;
-          case "winner": paintWait("Winner reveal on the big screen"); break;
+          case "winner": paintWait("Winner reveal on the big screen", true); break;
+          case "award": var rb = U.q("#ribbon"); if (rb) rb.innerHTML = ribbon(m); if (navigator.vibrate) try { navigator.vibrate([40, 40, 40]); } catch (x) {} U.SFX.right(); break;
           case "ask": if (!(S.phase === "ask" && S.q && S.q.q === m.q)) paintAsk(m); break;
           case "ack": break;
           case "result": paintResult(m); break;
-          case "board": if (S.phase !== "result") paintWait("Leaderboard is on the screen"); else { var el = U.q(".result"); if (el) el.insertAdjacentHTML("beforeend", '<div class="sub rise" style="margin-top:18px;color:var(--mute);font-weight:700;font-size:13px;letter-spacing:.08em;text-transform:uppercase">Leaderboard is on the screen</div>'); } break;
+          case "board": if (S.phase !== "result") paintWait("Leaderboard is on the screen", true); break;
           case "final": paintFinal(m); break;
         }
       },
