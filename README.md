@@ -3,6 +3,8 @@
 Live trivia for the Fall 2026 last chapter meeting. One laptop on the projector is the host,
 everyone else joins from their phone: type a name, draw yourself, answer with one tap.
 
+Live at **https://shrmtrivia.pages.dev** (publish with `python tools/publish.py`; GitHub Pages mirror at qwendor.github.io/trivia).
+
 - Host screen: open `index.html?host=1` (or click "Host on this screen"). Space / Enter / Right arrow = next.
 - Phones: scan the QR on the host screen, or open the site and type the 4-letter code.
 - Questions: `js/questions.js` holds the official 25 questions in five rounds, in order, plus 3 tiebreakers.
@@ -16,7 +18,7 @@ everyone else joins from their phone: type a name, draw yourself, answer with on
 ```
 python serve.py     # https://<LAN IP>:4365 for phones, http://localhost:4366/?host=1 for the screen
 ```
-PeerJS needs internet for the handshake even on a LAN. For a real event use the GitHub Pages URL.
+PeerJS needs internet for the handshake even on a LAN. For a real event use https://shrmtrivia.pages.dev.
 
 ## Test hooks
 Host: `?bots=20` fake players, `?fast` short timers, `?auto` auto-advance.
