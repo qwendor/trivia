@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0B1142">
+<title>Trivia Night — SHRM at VCU</title>
+<meta name="description" content="SHRM at VCU Trivia Night. Draw yourself, join from your phone, answer fast.">
+<meta property="og:title" content="SHRM@VCU Trivia Night">
+<meta property="og:description" content="One last chapter meeting. One winning table. Join from your phone.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230B1142'/%3E%3Ctext x='32' y='50' font-family='Impact,sans-serif' font-size='48' fill='%23A896EA' text-anchor='middle'%3E%3F%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Instrument+Serif:ital@1&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="bg">
+  <div class="qmark"><svg viewBox="0 0 100 190" preserveAspectRatio="none"><path d="M14 52 C14 18 36 6 56 6 C78 6 92 20 92 42 C92 70 62 76 62 104 L62 120 L40 120 L40 100 C40 70 70 66 70 44 C70 32 64 26 54 26 C44 26 36 34 36 52 Z M38 140 L64 140 L64 170 L38 170 Z"/></svg></div>
+  <div class="qmark two"><svg viewBox="0 0 100 190" preserveAspectRatio="none"><path d="M14 52 C14 18 36 6 56 6 C78 6 92 20 92 42 C92 70 62 76 62 104 L62 120 L40 120 L40 100 C40 70 70 66 70 44 C70 32 64 26 54 26 C44 26 36 34 36 52 Z M38 140 L64 140 L64 170 L38 170 Z"/></svg></div>
+  <div class="vignette"></div>
+</div>
+<div class="grain"></div>
+
+<main id="app"></main>
+
+<script src="vendor/peerjs.min.js"></script>
+<script src="vendor/qrcode.min.js"></script>
+<script src="js/questions.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/net.js"></script>
+<script src="js/avatar.js"></script>
+<script src="js/host.js"></script>
+<script src="js/player.js"></script>
+<script>
+(function () {
+  "use strict";
+  var U = window.UI;
+
+  function hashCode() {
+    var h = (location.hash || "").replace(/^#\/?/, "").trim().toUpperCase();
+    return /^[A-Z0-9]{4}$/.test(h) ? h : "";
+  }
+
+  function paintLanding() {
+    U.render(
+      '<div class="topbar"><div class="wordmark">SHRM<b>@</b>VCU</div>' +
+        '<div class="right"><div class="eyebrow">Fall 2026</div><div class="eyebrow gold">Last meeting of the semester</div></div></div>' +
+      '<div class="landing">' +
+        '<p class="tag serif rise">One last chapter meeting.<br><span class="sky">One winning phone.</span></p>' +
+        '<h1 class="display rise d1"><span class="l1">Trivia</span><span class="l2">Night</span></h1>' +
+        '<p class="blurb rise d2">Put this screen on the projector, everyone else scans the QR code, draws themselves, ' +
+        'and answers on their phone. Right answers score. Fast right answers score a little more.</p>' +
+        '<div class="row rise d3">' +
+          '<button class="btn gold big" id="hostBtn">Host on this screen</button>' +
+          '<form class="joinform" id="joinForm">' +
+            '<input class="field codefield" id="codeIn" maxlength="4" placeholder="CODE" ' +
+            'autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text">' +
+            '<button class="btn" type="submit">Join</button>' +
+          '</form>' +
+        '</div>' +
+        '<div class="facts rise d4">' +
+          '<div><div class="eyebrow">When</div><div class="display">Mon, Nov 16</div><small>Snead Hall B3187/3189</small></div>' +
+          '<div><div class="eyebrow">Prizes</div><div class="display">Gift cards</div><small>For the winner</small></div>' +
+          '<div><div class="eyebrow">Who</div><div class="display">All majors</div><small>Questions, points, bragging rights</small></div>' +
+        '</div>' +
+      '</div>'
+    );
+    U.on("#hostBtn", "click", function () {
+      history.replaceState(null, "", location.pathname + "?host=1");
+      startHost();
+    });
+    document.getElementById("joinForm").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var v = (document.getElementById("codeIn").value || "").trim().toUpperCase();
+      if (!/^[A-Z0-9]{4}$/.test(v)) { U.toast("That code should be 4 characters", true); return; }
+      location.hash = "#" + v;
+      startPlayer(v);
+    });
+    document.getElementById("codeIn").addEventListener("input", function (e) {
+      e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    });
+  }
+
+  var booted = false;
+  function startHost() {
+    if (booted) return; booted = true;
+    document.title = "Trivia Night — host";
+    window.HOST.start();
+  }
+  function startPlayer(code) {
+    if (booted) return; booted = true;
+    document.title = "Trivia Night — " + code;
+    document.body.classList.add("is-player");
+    window.PLAYER.start(code);
+  }
+
+  var params = new URLSearchParams(location.search);
+  if (params.get("host")) startHost();
+  else if (hashCode()) startPlayer(hashCode());
+  else paintLanding();
+
+  window.addEventListener("hashchange", function () {
+    if (!booted && hashCode()) startPlayer(hashCode());
+  });
+})();
+</script>
+</body>
+</html>
