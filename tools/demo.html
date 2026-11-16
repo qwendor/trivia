@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trivia Night demo: big screen + phone</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #04061A; font-family: "Manrope", "Segoe UI", sans-serif; color: #F3EEE3; overflow: hidden; }
+  .wrap { position: relative; width: 1600px; height: 900px; display: flex; align-items: center; justify-content: center; gap: 44px; }
+  .label { position: absolute; top: 14px; font-weight: 800; font-size: 12px; letter-spacing: .3em; text-transform: uppercase; color: #9BD1FF; }
+  .screen { position: relative; width: 1120px; height: 630px; border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 6px #10153F, 0 30px 80px rgba(0,0,0,.6); background: #0B1142; }
+  .screen .label { left: 0; top: -34px; }
+  .screen iframe { width: 1600px; height: 900px; border: 0; transform: scale(.7); transform-origin: 0 0; }
+  .phone { position: relative; width: 375px; height: 812px; border-radius: 46px; overflow: hidden; box-shadow: 0 0 0 10px #15193A, 0 0 0 12px #2A2F5C, 0 30px 80px rgba(0,0,0,.6); background: #0B1142; }
+  .phone .label { left: 0; right: 0; text-align: center; top: -34px; }
+  .phone iframe { width: 375px; height: 812px; border: 0; }
+  .phone::after { content: ""; position: absolute; left: 50%; top: 10px; width: 120px; height: 28px; margin-left: -60px; background: #15193A; border-radius: 999px; pointer-events: none; }
+  .holder { position: relative; }
+  .foot { position: absolute; left: 0; right: 0; bottom: 14px; text-align: center; font-size: 12px; letter-spacing: .2em; text-transform: uppercase; color: rgba(243,238,227,.4); font-weight: 800; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="holder"><div class="label">Big screen (projector)</div><div class="screen"><iframe id="host" src="../?host=1&bots=9&fast"></iframe></div></div>
+  <div class="holder"><div class="label">A player's phone</div><div class="phone"><iframe id="phone" src="about:blank"></iframe></div></div>
+  <div class="foot">SHRM@VCU Trivia Night · qwendor.github.io/trivia</div>
+</div>
+<script>
+  // Once the host has a room code, point the phone at it (same origin, so we can peek).
+  var t = setInterval(function () {
+    try {
+      var w = document.getElementById("host").contentWindow;
+      var code = w.TRIVIA && w.TRIVIA.state().code;
+      if (code) { document.getElementById("phone").src = "../#" + code; clearInterval(t); }
+    } catch (e) {}
+  }, 300);
+</script>
+</body>
+</html>

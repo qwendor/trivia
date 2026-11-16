@@ -329,6 +329,7 @@
       var answered = counts[0] + counts[1] + counts[2] + counts[3];
       G.hist[G.qi] = { counts: counts, c: q.c, round: q.round, majorityWrong: counts[q.c] * 2 < answered };
       if (G.qi === Math.floor(G.qs.length / 2) - 1) { G.midRank = {}; ranked().forEach(function (p, i) { G.midRank[p.pid] = i + 1; }); }
+      G.rankHist = G.rankHist || []; G.rankHist[G.qi] = {}; ranked().forEach(function (p, i) { G.rankHist[G.qi][p.pid] = i + 1; });
     }
     var total = allPlayers().length;
     allPlayers().forEach(function (p) {
@@ -634,17 +635,27 @@
       used[c.p.pid] = true;
       out.push({ title: title, icon: icon, p: c.p, text: c.text });
     }
-    var ff = ps.filter(function (p) { return p.correct >= 3; }).map(function (p) { return { p: p, v: p.totalMs / p.correct }; })
+    var need = Math.min(3, Math.max(1, G.hist.filter(Boolean).length));
+    var ff = ps.filter(function (p) { return p.correct >= need; }).map(function (p) { return { p: p, v: p.totalMs / p.correct }; })
       .sort(function (a, b) { return a.v - b.v; }).map(function (x) { return { p: x.p, text: (x.v / 1000).toFixed(1) + "s average on right answers" }; });
-    var lastRound = 0; G.qs.forEach(function (q) { if (q.round > lastRound) lastRound = q.round; });
-    var cl = ps.map(function (p) { var v = 0; G.qs.forEach(function (q, i) { if (q.round === lastRound && p.answers[i]) v += p.answers[i].gained; }); return { p: p, v: v }; })
-      .filter(function (x) { return x.v > 0; }).sort(function (a, b) { return b.v - a.v; }).map(function (x) { return { p: x.p, text: U.fmtScore(x.v) + " points in the final round" }; });
+    // Clutch: points in the final round (or the last five questions played, if the game ended early).
+    var played = G.hist.map(function (h, i) { return h ? i : -1; }).filter(function (i) { return i >= 0; });
+    var lastRound = 0; played.forEach(function (i) { if (G.qs[i].round > lastRound) lastRound = G.qs[i].round; });
+    var finalIdx = played.filter(function (i) { return G.qs[i].round === lastRound; });
+    if (finalIdx.length < 3) finalIdx = played.slice(-5);
+    var cl = ps.map(function (p) { var v = 0; finalIdx.forEach(function (i) { if (p.answers[i]) v += p.answers[i].gained; }); return { p: p, v: v }; })
+      .filter(function (x) { return x.v > 0; }).sort(function (a, b) { return b.v - a.v; }).map(function (x) { return { p: x.p, text: U.fmtScore(x.v) + " points down the stretch" }; });
+    // Comeback: biggest climb from halftime (or from after the first question) to the end.
     var fin = {}; ranked().forEach(function (p, i) { fin[p.pid] = i + 1; });
-    var cb = ps.map(function (p) { return { p: p, v: (G.midRank[p.pid] || fin[p.pid]) - fin[p.pid] }; })
+    var base = Object.keys(G.midRank).length ? G.midRank : ((G.rankHist || [])[played[0]] || {});
+    var cb = ps.map(function (p) { return { p: p, v: (base[p.pid] || fin[p.pid]) - fin[p.pid] }; })
       .filter(function (x) { return x.v >= 2; }).sort(function (a, b) { return b.v - a.v; }).map(function (x) { return { p: x.p, text: "climbed " + x.v + " places after halftime" }; });
+    // Against the grain: right when most of the room was wrong. Fallback: the slowest sure thing.
     var ag = ps.map(function (p) { var v = 0; G.hist.forEach(function (h, i) { if (h && h.majorityWrong && p.answers[i] && p.answers[i].right) v++; }); return { p: p, v: v }; })
       .filter(function (x) { return x.v >= 2; }).sort(function (a, b) { return b.v - a.v; }).map(function (x) { return { p: x.p, text: "right " + x.v + " times when the room was wrong" }; });
-    pick(ff, "Fastest finger", "\u26A1"); pick(cl, "Clutch", "\uD83C\uDFAF"); pick(cb, "Comeback", "\uD83D\uDCC8"); pick(ag, "Against the grain", "\uD83E\uDDE0");
+    var slow = ff.slice().reverse();
+    pick(ff, "Fastest finger", "\u26A1"); pick(cl, "Clutch", "\uD83C\uDFAF"); pick(cb, "Comeback", "\uD83D\uDCC8");
+    if (ag.length) pick(ag, "Against the grain", "\uD83E\uDDE0"); else if (slow.length > 1) pick(slow, "Slow and steady", "\uD83D\uDC22");
     return out;
   }
   function awards() {
