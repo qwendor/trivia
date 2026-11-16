@@ -88,6 +88,7 @@
   function startHost() {
     if (booted) return; booted = true;
     document.title = "Trivia Night — host";
+    document.body.classList.add("is-host");
     window.HOST.start();
   }
   function startPlayer(code) {
