@@ -18,7 +18,7 @@ Live at **https://shrmtrivia.pages.dev** (publish with `python tools/publish.py`
 ```
 python serve.py     # https://<LAN IP>:4365 for phones, http://localhost:4366/?host=1 for the screen
 ```
-PeerJS needs internet for the handshake even on a LAN. For a real event use https://shrmtrivia.pages.dev.
+All traffic goes through the Cloudflare relay worker in `relay/` (deploy it from that folder with wrangler), so it works on campus Wi-Fi. For a real event use https://shrmtrivia.pages.dev.
 
 ## Test hooks
 Host: `?bots=20` fake players, `?fast` short timers, `?auto` auto-advance.
