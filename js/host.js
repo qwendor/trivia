@@ -83,6 +83,11 @@
         if (msg.t === "answer") takeAnswer(pid, msg);
         else if (msg.t === "react") spawnReaction(pid, msg.e);
       },
+      onLink: function (isUp) {
+        var el = U.q("#hostlink");
+        if (!el) { el = document.createElement("div"); el.id = "hostlink"; el.textContent = "Reconnecting to the relay..."; document.body.appendChild(el); }
+        el.classList.toggle("show", !isUp);
+      },
       onError: function (err) { U.toast("Connection problem: " + (err && err.type || "unknown"), true); }
     });
   }

@@ -58,8 +58,12 @@ export class Room {
     }
   }
 
-  webSocketClose(ws) { this.gone(ws); }
-  webSocketError(ws) { this.gone(ws); }
+  webSocketClose(ws, code, reason) {
+    this.gone(ws);
+    // Complete the closing handshake, otherwise a browser that closed first hangs in CLOSING.
+    try { ws.close(code === 1005 || code === 1006 ? 1000 : code, reason || ""); } catch (e) {}
+  }
+  webSocketError(ws) { this.gone(ws); try { ws.close(1011, "error"); } catch (e) {} }
 
   gone(ws) {
     const tags = this.ctx.getTags(ws);

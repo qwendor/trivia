@@ -3,12 +3,15 @@
    phone -> relay -> big screen and back. The relay is a Cloudflare Worker (see relay/).
    Same API the host and player code always used:
      NET.host(cb)  -> { code, send(pid,msg), broadcast(msg), isConnected(pid), destroy() }
-     NET.join(code, cb) -> { send(msg), isOpen(), destroy() } */
+     NET.join(code, cb) -> { send(msg), isOpen(), destroy() }
+   Both sides ping the relay every few seconds and reconnect on their own if the pongs stop,
+   because a dropped Wi-Fi link does not always close the socket. */
 (function () {
   "use strict";
 
   var ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I O 0 1
-  var PING_MS = 7000;
+  var PING_MS = 6000;
+  var PONG_TIMEOUT = 20000;
   var RELAY = (new URLSearchParams(location.search).get("relay") || "wss://shrmtrivia-relay.coopermeidinger1.workers.dev").replace(/\/$/, "");
 
   function code(n) {
@@ -18,21 +21,44 @@
   }
   function parse(data) { try { var m = JSON.parse(data); return m && typeof m === "object" ? m : null; } catch (e) { return null; } }
 
+  /* Heartbeat: ping the relay, and if pongs stop, kill the socket so the reconnect logic runs. */
+  function heartbeat(getWs, onDead) {
+    var lastPong = Date.now(), iv;
+    iv = setInterval(function () {
+      var ws = getWs();
+      if (!ws || ws.readyState !== 1) return;
+      if (Date.now() - lastPong > PONG_TIMEOUT) { try { ws.close(); } catch (e) {} onDead(); return; }
+      try { ws.send('{"t":"ping"}'); } catch (e) {}
+    }, PING_MS);
+    return { pong: function () { lastPong = Date.now(); }, reset: function () { lastPong = Date.now(); }, stop: function () { clearInterval(iv); } };
+  }
+
   /* ------------------------------------------------------------------
      HOST
      ------------------------------------------------------------------ */
   function host(cb) {
-    var ws = null, roomCode = code(4), dead = false, readyOnce = false, retryT = 0, attempts = 0;
+    var ws = null, roomCode = code(4), dead = false, readyOnce = false, retryT = 0, attempts = 0, up = false;
     var cidToPid = {}, pidToCid = {};
+    var hb = heartbeat(function () { return ws; }, function () { linkDown(); });
 
+    function linkDown() {
+      if (!up) return;
+      up = false;
+      cb.onLink && cb.onLink(false);
+    }
     function boot() {
       if (dead) return;
-      try { ws = new WebSocket(RELAY + "/room/" + roomCode + "?role=host"); } catch (e) { schedule(); return; }
-      ws.onmessage = function (ev) {
+      var sock;
+      try { sock = new WebSocket(RELAY + "/room/" + roomCode + "?role=host"); } catch (e) { schedule(); return; }
+      ws = sock;
+      sock.onmessage = function (ev) {
+        if (sock !== ws) return;
         var env = parse(ev.data); if (!env) return;
+        if (env.t === "pong") { hb.pong(); return; }
         if (env.t === "_ready") {
-          attempts = 0;
+          attempts = 0; up = true; hb.reset();
           if (!readyOnce) { readyOnce = true; cb.onReady && cb.onReady(roomCode); }
+          cb.onLink && cb.onLink(true);
           return;
         }
         if (env.t === "_close") {
@@ -55,14 +81,14 @@
         if (msg.t === "ping") return;
         cb.onMsg && cb.onMsg(bound, msg);
       };
-      ws.onclose = function () { if (!dead) schedule(); };
-      ws.onerror = function () {};
+      sock.onclose = function () { if (sock !== ws) return; linkDown(); if (!dead) schedule(); };
+      sock.onerror = function () {};
     }
     function schedule() {
       attempts++;
       clearTimeout(retryT);
-      retryT = setTimeout(boot, Math.min(800 + attempts * 600, 5000));
-      if (attempts === 3 && cb.onError) cb.onError({ type: "network" });
+      retryT = setTimeout(boot, Math.min(600 + attempts * 500, 4000));
+      if (attempts === 4 && cb.onError) cb.onError({ type: "network" });
     }
 
     boot();
@@ -70,6 +96,7 @@
     return {
       get code() { return roomCode; },
       isConnected: function (pid) { return !!pidToCid[pid]; },
+      isUp: function () { return up; },
       send: function (pid, msg) {
         var cid = pidToCid[pid];
         if (!cid || !ws || ws.readyState !== 1) return false;
@@ -79,7 +106,7 @@
         if (!ws || ws.readyState !== 1) return;
         try { ws.send(JSON.stringify({ to: "*", msg: msg })); } catch (e) {}
       },
-      destroy: function () { dead = true; clearTimeout(retryT); try { ws.close(); } catch (e) {} }
+      destroy: function () { dead = true; hb.stop(); clearTimeout(retryT); try { ws.close(); } catch (e) {} }
     };
   }
 
@@ -87,44 +114,46 @@
      PLAYER
      ------------------------------------------------------------------ */
   function join(roomCode, cb) {
-    var ws = null, dead = false, attempts = 0, pingT = 0, retryT = 0, open = false;
+    var ws = null, dead = false, attempts = 0, retryT = 0, open = false;
     var target = RELAY + "/room/" + String(roomCode || "").toUpperCase() + "?role=player";
+    var hb = heartbeat(function () { return ws; }, function () { fail("silent"); });
 
     function fail(reason) {
       if (dead) return;
+      var wasOpen = open;
       open = false;
-      clearInterval(pingT);
-      cb.onDrop && cb.onDrop(reason);
+      if (wasOpen) cb.onDrop && cb.onDrop(reason);
       schedule();
     }
     function schedule() {
       if (dead) return;
       attempts++;
-      if (attempts > 60) { cb.onGiveUp && cb.onGiveUp(); return; }
+      if (attempts > 80) { cb.onGiveUp && cb.onGiveUp(); return; }
       clearTimeout(retryT);
-      retryT = setTimeout(boot, Math.min(1000 + attempts * 500, 5000));
+      retryT = setTimeout(boot, Math.min(800 + attempts * 500, 5000));
     }
     function boot() {
       if (dead) return;
+      var sock;
       try { if (ws) { ws.onclose = null; ws.close(); } } catch (e) {}
-      try { ws = new WebSocket(target); } catch (e) { fail("network"); return; }
-      var guard = setTimeout(function () { if (!open) { try { ws.close(); } catch (e) {} } }, 12000);
-      ws.onmessage = function (ev) {
+      try { sock = new WebSocket(target); } catch (e) { schedule(); return; }
+      ws = sock;
+      var guard = setTimeout(function () { if (!open && sock === ws) { try { sock.close(); } catch (e) {} } }, 12000);
+      sock.onmessage = function (ev) {
+        if (sock !== ws) return;
         var m = parse(ev.data); if (!m) return;
-        if (m.t === "pong") return;
+        if (m.t === "pong") { hb.pong(); return; }
         if (m.t === "_noroom") { clearTimeout(guard); cb.onNoRoom && cb.onNoRoom(); return; }
         if (m.t === "_hello") {
           clearTimeout(guard);
-          open = true; attempts = 0;
+          open = true; attempts = 0; hb.reset();
           cb.onOpen && cb.onOpen();
-          clearInterval(pingT);
-          pingT = setInterval(function () { if (ws && ws.readyState === 1) { try { ws.send('{"t":"ping"}'); } catch (e) {} } }, PING_MS);
           return;
         }
         cb.onMsg && cb.onMsg(m);
       };
-      ws.onclose = function () { clearTimeout(guard); fail(open ? "closed" : "refused"); };
-      ws.onerror = function () {};
+      sock.onclose = function () { if (sock !== ws) return; clearTimeout(guard); if (open) fail("closed"); else schedule(); };
+      sock.onerror = function () {};
     }
 
     boot();
@@ -135,7 +164,7 @@
         return false;
       },
       isOpen: function () { return !!(ws && ws.readyState === 1 && open); },
-      destroy: function () { dead = true; clearInterval(pingT); clearTimeout(retryT); try { ws.close(); } catch (e) {} }
+      destroy: function () { dead = true; hb.stop(); clearTimeout(retryT); try { ws.close(); } catch (e) {} }
     };
   }
 

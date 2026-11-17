@@ -537,3 +537,6 @@ body.is-host { overflow: hidden; }
 .ribbon .x { color: var(--mute); font-weight: 700; font-size: 12px; margin-top: 3px; }
 .result .gained small.bd { font-size: 13px; letter-spacing: .04em; color: var(--mute); }
 .result .gained small.bd b { color: var(--melon); font-weight: 800; }
+
+#hostlink { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); z-index: 70; background: var(--melon); color: var(--cream); font-weight: 800; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; padding: 8px 16px; border-radius: 999px; display: none; animation: pulse 1.2s ease-in-out infinite; }
+#hostlink.show { display: block; }
