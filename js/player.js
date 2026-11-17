@@ -63,7 +63,7 @@
       S.name = name; S.avatar = pad.toDataURL();
       save();
       U.SFX.unlock();
-      paintWait("Joining...");
+      paintWait("Connecting to the big screen...");
       connect();
     });
   }
@@ -213,9 +213,9 @@
           case "final": paintFinal(m); break;
         }
       },
-      onNoRoom: function () { U.toast("No game with code " + S.code + " yet. Is the big screen up?", true); },
-      onDrop: function () { var c = U.q("#conn"); if (c) c.classList.add("show"); },
-      onGiveUp: function () { U.toast("Lost the connection. Reload to try again.", true); },
+      onNoRoom: function () { U.toast("No game with code " + S.code + " on the big screen yet", true); var w = U.q("#waitsub"); if (w) w.textContent = "Waiting for the big screen to open room " + S.code; },
+      onDrop: function () { var c = U.q("#conn"); if (c) c.classList.add("show"); var w = U.q("#waitsub"); if (w) w.textContent = "Reconnecting to the big screen..."; },
+      onGiveUp: function () { U.toast("Could not reach the game. Check your signal and reload.", true); },
       onError: function () {}
     });
   }
